@@ -4,8 +4,11 @@ idf_component_register(
         "schedule_storage.c"
         "schedule_monitor.c"
         "schedule_event.c"
+        "time_sync.c"
     PRIV_REQUIRES
         nvs_flash
+        esp_netif
+        lwip
     INCLUDE_DIRS
         "."
 )

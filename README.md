@@ -12,14 +12,14 @@
 - 设备重启后可从 NVS 读取已保存日程
 - 提供 UI 保存接口，便于后续 LVGL 回调调用
 - 使用 FreeRTOS 后台任务监控日程
-- 使用模拟时间从 `19:59:50` 开始每秒递增
-- 当模拟时间命中保存的日程时间时，通过串口日志输出提醒
+- 新增 SNTP 本地时间校准模块
+- 支持北京时间 UTC+8
+- 有网络且 Wi-Fi 已连接时使用真实时间
+- 无网络或尚未完成 SNTP 校时时，自动使用模拟时间 fallback
+- 当时间命中保存的日程时间时，通过串口日志输出提醒，并发送 Queue 事件给 UI
 
 计划实现：
 
-- SNTP 联网校时
-- 使用本地 RTC 获取真实时间
-- 获取北京时间
 - 触发日程后显示 LVGL 卡片
 - 触发日程后向 AI/TTS 模块发送 `task_id`
 
@@ -35,6 +35,10 @@
     ├── schedule_storage.h
     ├── schedule_monitor.c
     └── schedule_monitor.h
+    ├── schedule_event.c
+    ├── schedule_event.h
+    ├── time_sync.c
+    └── time_sync.h
 ```
 
 ## 模块说明
@@ -88,8 +92,10 @@ esp_err_t schedule_save_default(void);
 
 - 创建一个 FreeRTOS task
 - 每秒读取一次 NVS 中的当前日程
-- 使用模拟时间进行命中判断
+- 优先使用 `time_sync_get_now()` 获取真实北京时间
+- 如果 SNTP 时间未同步，使用模拟时间进行 fallback
 - 命中后打印提醒日志
+- 命中后通过 `schedule_event_send()` 发送 Queue 事件
 - 同一分钟内同一任务只触发一次，避免重复提醒
 
 当前模拟时间初始值：
@@ -105,6 +111,51 @@ esp_err_t schedule_save_default(void);
 ```
 
 因此烧录启动后大约等待 10 秒即可看到触发日志。
+
+### schedule_event
+
+负责把日程触发结果转换为 FreeRTOS Queue 事件，供 UI 模块接收。
+
+事件结构体：
+
+```c
+typedef struct {
+    int8_t task_id;
+    char task_name[32];
+    int8_t hour;
+    int8_t minute;
+} schedule_event_t;
+```
+
+主要接口：
+
+```c
+esp_err_t schedule_event_init(void);
+esp_err_t schedule_event_send(const schedule_config_t *cfg);
+QueueHandle_t schedule_event_get_queue(void);
+```
+
+### time_sync
+
+负责 SNTP 时间同步和北京时间获取。
+
+主要接口：
+
+```c
+esp_err_t time_sync_init(void);
+bool time_sync_is_valid(void);
+esp_err_t time_sync_get_now(int *hour, int *minute, int *second);
+```
+
+说明：
+
+- `time_sync_init()` 启动 SNTP，不写死 Wi-Fi SSID 和密码
+- 当前 Wi-Fi 模块尚未接入，`time_sync_init()` 暂时在 `app_main()` 中调用
+- 后续队友接入 Wi-Fi 后，建议把 `time_sync_init()` 移动到 Wi-Fi connected 事件之后调用
+- 使用 `setenv("TZ", "CST-8", 1)` 和 `tzset()` 设置北京时间
+- 使用 `time()` 和 `localtime_r()` 获取本地时间
+- 若时间尚未同步，`time_sync_get_now()` 返回 `ESP_FAIL`
+- 当前 `schedule_monitor` 会在时间无效时自动使用模拟时间 fallback
 
 ## 构建与烧录
 
@@ -211,18 +262,15 @@ idf_component_register(
         "main.c"
         "schedule_storage.c"
         "schedule_monitor.c"
+        "schedule_event.c"
+        "time_sync.c"
     PRIV_REQUIRES
         nvs_flash
+        esp_netif
+        lwip
     INCLUDE_DIRS
         "."
 )
-```
-
-如果后续加入 SNTP 时间模块，通常还需要增加：
-
-```cmake
-esp_netif
-lwip
 ```
 
 如果 Wi-Fi 初始化也放在本组件中，还需要增加：
@@ -283,11 +331,11 @@ AI/TTS 模块根据 `task_id` 生成适合 ASD 儿童的引导语，再进行语
 
 ### 替换真实时间
 
-建议新增：
+当前已新增：
 
 ```text
-schedule_time.c
-schedule_time.h
+time_sync.c
+time_sync.h
 ```
 
 职责：
@@ -296,12 +344,68 @@ schedule_time.h
 - 设置北京时间时区
 - 获取当前本地时间
 
+当前版本不会在 `time_sync.c` 中写死 Wi-Fi 账号密码。若后续 Wi-Fi 模块由队友实现，推荐在 Wi-Fi connected 事件之后调用：
+
+```c
+time_sync_init();
+```
+
 这样 `schedule_monitor` 只关心“现在几点”，不直接处理网络和 SNTP 细节。
+
+## SNTP 时间测试
+
+### 无网络测试
+
+不连接 Wi-Fi，直接烧录运行：
+
+```powershell
+idf.py build flash monitor
+```
+
+预期日志中会看到：
+
+```text
+MOCK_TIME: 19:59:xx | Schedule: 20:00 ...
+```
+
+约 10 秒后触发：
+
+```text
+Schedule Triggered
+Source    : MOCK_TIME
+```
+
+### 有网络测试
+
+当前工程还没有 Wi-Fi 模块。有网络测试需要队友的 Wi-Fi 模块先完成连接，再调用 `time_sync_init()`。
+
+推荐后续顺序：
+
+```text
+Wi-Fi connected
+    ↓
+time_sync_init()
+    ↓
+schedule_monitor 使用 REAL_TIME
+```
+
+SNTP 同步成功后，日志应显示：
+
+```text
+REAL_TIME: HH:MM:SS | Schedule: ...
+```
+
+到达日程时间后触发：
+
+```text
+Schedule Triggered
+Source    : REAL_TIME
+```
 
 ## 注意事项
 
-- 当前版本使用模拟时间，不依赖联网
-- 当前提醒方式是串口 `printf`，还未接入 LVGL 和 TTS
+- 当前版本支持 SNTP 真实时间，也保留模拟时间 fallback
+- 当前提醒方式保留串口 `printf`，同时已通过 Queue 向 UI 发送事件
 - `schedule_storage` 的对外接口应保持稳定，便于 UI 模块调用
 - 如果修改默认日程后发现启动仍读取旧日程，需要先执行 `idf.py erase-flash`
 - 源码中的中文注释建议统一保存为 UTF-8，避免不同终端显示乱码
