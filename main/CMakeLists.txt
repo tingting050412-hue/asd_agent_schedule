@@ -1,0 +1,11 @@
+idf_component_register(
+    SRCS
+        "main.c"
+        "schedule_storage.c"
+        "schedule_monitor.c"
+        "schedule_event.c"
+    PRIV_REQUIRES
+        nvs_flash
+    INCLUDE_DIRS
+        "."
+)
