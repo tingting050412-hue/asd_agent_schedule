@@ -9,7 +9,6 @@ UI 设置页面需要收集：
 - hour: 小时，范围 `0~23`
 - minute: 分钟，范围 `0~59`
 - task_id: 任务 ID
-- task_name: 任务名称
 - enabled: 是否启用
 
 保存按钮回调中调用：
@@ -22,13 +21,11 @@ void ui_save_schedule_button_cb(void)
     int8_t hour = 20;
     int8_t minute = 0;
     int8_t task_id = TASK_BRUSH_TEETH;
-    const char *task_name = "brush teeth";
     bool enabled = true;
 
     esp_err_t err = schedule_save_from_ui(hour,
                                           minute,
                                           task_id,
-                                          task_name,
                                           enabled);
     if (err != ESP_OK) {
         /* Show save failed state in UI. */
@@ -39,7 +36,50 @@ void ui_save_schedule_button_cb(void)
 }
 ```
 
-UI 模块不要直接操作 NVS，应统一通过 `schedule_save_from_ui()` 写入日程。
+UI 模块不要直接操作 NVS，应统一通过 `schedule_save_from_ui()` 写入日程。家长端只能选择固定任务类型，不能输入自定义任务名称。
+
+`schedule_save_from_ui()` 是兼容接口，默认写入 index 0。如果 UI 后续支持日程列表，建议改用 index 接口：
+
+```c
+#include "schedule_storage.h"
+
+void ui_save_schedule_by_index(int index)
+{
+    schedule_config_t cfg = {
+        .hour = 20,
+        .minute = 30,
+        .task_id = TASK_READING,
+        .enabled = 1,
+    };
+
+    esp_err_t err = schedule_save_by_index(index, &cfg);
+    if (err != ESP_OK) {
+        /* Show save failed state in UI. */
+        return;
+    }
+
+    /* Refresh schedule list in UI. */
+}
+```
+
+读取全部日程：
+
+```c
+schedule_config_t list[MAX_SCHEDULE_NUM];
+int count = 0;
+
+if (schedule_get_all(list, MAX_SCHEDULE_NUM, &count) == ESP_OK) {
+    for (int i = 0; i < count; i++) {
+        /* Render list[i] in UI. */
+    }
+}
+```
+
+删除指定日程：
+
+```c
+schedule_delete_by_index(index);
+```
 
 ## Receive Schedule Events
 
@@ -62,7 +102,7 @@ void ui_schedule_task(void *arg)
         if (xQueueReceive(queue, &event, portMAX_DELAY) == pdTRUE) {
             ui_show_schedule_card(
                 event.task_id,
-                event.task_name,
+                schedule_get_task_name(event.task_id),
                 event.hour,
                 event.minute
             );
@@ -104,5 +144,4 @@ schedule_monitor_start()
 - `xQueueReceive()` 可以在 UI 辅助任务中阻塞等待事件。
 - 如果 LVGL 只能在指定 UI 线程操作，应在收到事件后切换到 LVGL 安全上下文再更新界面。
 - 不建议在 `schedule_monitor` 任务里直接调用 LVGL API，以免增加模块耦合。
-- `task_name` 已复制到 `schedule_event_t` 中，UI 收到事件后可以直接读取。
-
+- `schedule_event_t` 只包含 `task_id`、`hour`、`minute`，UI 收到事件后通过 `schedule_get_task_name(event.task_id)` 获取名称。

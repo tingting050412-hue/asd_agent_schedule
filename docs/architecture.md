@@ -8,7 +8,7 @@
 
 当前模块边界：
 
-- `schedule_storage`：负责日程配置的 NVS 持久化。
+- `schedule_storage`：负责最多 20 个日程配置的 NVS 持久化，并提供 `task_id` 到任务名称的映射。
 - `schedule_monitor`：负责后台时间监测和日程匹配。
 - `schedule_event`：负责把触发结果转换为事件并发送到 FreeRTOS Queue。
 - `UI`：后续由 LVGL 模块实现，负责输入日程和显示提醒卡片。
@@ -28,7 +28,7 @@ schedule_storage
 NVS
 ```
 
-UI 不直接操作 NVS，而是通过 `schedule_save_from_ui()` 保存结构化日程配置。
+UI 不直接操作 NVS。兼容的单日程保存仍可使用 `schedule_save_from_ui()`，日程列表功能应使用 `schedule_save_by_index(index, &cfg)`。
 
 ### Trigger Schedule
 
@@ -42,7 +42,19 @@ schedule_storage
 NVS
 ```
 
-`schedule_monitor` 周期性读取当前日程配置，并与当前时间进行匹配。
+`schedule_monitor` 周期性读取全部日程配置，并与当前时间逐条匹配。
+
+NVS key 组织方式：
+
+```text
+schedule_count
+sch_0
+sch_1
+...
+sch_19
+```
+
+每个 `sch_x` 保存一个 `schedule_config_t` blob。当前结构只保存 `hour`、`minute`、`task_id`、`enabled`，不保存任务名称字符串。
 
 ### Notify UI
 
@@ -94,4 +106,3 @@ LVGL UI
 - Real time: replace mock time in `schedule_monitor` with SNTP and RTC based time.
 - UI card: consume `schedule_event_t` from Queue and render LVGL reminder cards.
 - AI/TTS: consume the same event or receive forwarded `task_id` from UI/event layer.
-

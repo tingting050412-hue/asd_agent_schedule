@@ -14,7 +14,6 @@ extern "C" {
 
 typedef struct {
     int8_t task_id;
-    char task_name[32];
     int8_t hour;
     int8_t minute;
 } schedule_event_t;

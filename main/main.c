@@ -1,25 +1,38 @@
-#include <stdio.h>
 #include <inttypes.h>
+#include <stdio.h>
 
 #include "esp_err.h"
-#include "nvs.h"
 #include "schedule_event.h"
-#include "schedule_storage.h"
 #include "schedule_monitor.h"
+#include "schedule_storage.h"
 #include "time_sync.h"
 
-static void print_schedule(const schedule_config_t *cfg)
+static void print_schedule_list(void)
 {
-    printf("Current schedule:\n");
-    printf("  enabled   : %" PRIi8 "\n", cfg->enabled);
-    printf("  time      : %02" PRIi8 ":%02" PRIi8 "\n", cfg->hour, cfg->minute);
-    printf("  task_id   : %" PRIi8 "\n", cfg->task_id);
-    printf("  task_name : %s\n", cfg->task_name);
+    schedule_config_t list[MAX_SCHEDULE_NUM];
+    int count = 0;
+    esp_err_t err = schedule_get_all(list, MAX_SCHEDULE_NUM, &count);
+
+    if (err != ESP_OK) {
+        printf("Failed to load schedule list: %s\n", esp_err_to_name(err));
+        return;
+    }
+
+    printf("Saved schedules: %d\n", count);
+    for (int i = 0; i < count; i++) {
+        printf("  [%d] %02" PRIi8 ":%02" PRIi8 " %s enabled=%" PRIi8 "\n",
+               i,
+               list[i].hour,
+               list[i].minute,
+               schedule_get_task_name(list[i].task_id),
+               list[i].enabled);
+    }
 }
 
 void app_main(void)
 {
     esp_err_t err;
+    int count = 0;
 
     printf("\nASD Schedule Storage + Monitor Demo Start\n");
 
@@ -29,35 +42,27 @@ void app_main(void)
         return;
     }
 
-    schedule_config_t cfg;
-    err = schedule_get_current(&cfg);
+    err = schedule_get_count(&count);
+    if (err != ESP_OK) {
+        printf("Failed to get schedule count: %s\n", esp_err_to_name(err));
+        return;
+    }
 
-    if (err == ESP_ERR_NVS_NOT_FOUND) {
-        printf("No schedule found. Save default schedule.\n");
+    if (count == 0) {
+        printf("No schedule found. Save default ASD schedules.\n");
 
         err = schedule_save_default();
         if (err != ESP_OK) {
-            printf("Failed to save default schedule: %s\n", esp_err_to_name(err));
+            printf("Failed to save default schedules: %s\n", esp_err_to_name(err));
             return;
         }
 
-        err = schedule_get_current(&cfg);
-        if (err != ESP_OK) {
-            printf("Failed to reload schedule: %s\n", esp_err_to_name(err));
-            return;
-        }
-
-        printf("Default schedule saved successfully.\n");
-        print_schedule(&cfg);
-
-    } else if (err == ESP_OK) {
-        printf("Schedule loaded from NVS successfully.\n");
-        print_schedule(&cfg);
-
+        printf("Default schedules saved successfully.\n");
     } else {
-        printf("Failed to load schedule: %s\n", esp_err_to_name(err));
-        return;
+        printf("Schedules loaded from NVS successfully.\n");
     }
+
+    print_schedule_list();
 
     err = schedule_event_init();
     if (err != ESP_OK) {

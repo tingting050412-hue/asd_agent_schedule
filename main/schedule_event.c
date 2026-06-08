@@ -1,7 +1,5 @@
 #include "schedule_event.h"
 
-#include <string.h>
-
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 
@@ -34,12 +32,11 @@ esp_err_t schedule_event_send(const schedule_config_t *cfg)
         return ESP_ERR_INVALID_STATE;
     }
 
-    schedule_event_t event;
-    memset(&event, 0, sizeof(event));
-
-    event.task_id = cfg->task_id;
-    event.hour = cfg->hour;
-    event.minute = cfg->minute;
+    schedule_event_t event = {
+        .task_id = cfg->task_id,
+        .hour = cfg->hour,
+        .minute = cfg->minute,
+    };
     strncpy(event.task_name, cfg->task_name, sizeof(event.task_name) - 1);
     event.task_name[sizeof(event.task_name) - 1] = '\0';
 

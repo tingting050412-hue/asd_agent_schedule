@@ -10,6 +10,9 @@
 
 - 使用 ESP-IDF NVS 保存日程配置
 - 设备重启后可从 NVS 读取已保存日程
+- 最多支持 20 个日程
+- 日程任务类型固定，家长只能从预设任务中选择
+- NVS 只保存 `task_id`，不保存任务名称字符串
 - 提供 UI 保存接口，便于后续 LVGL 回调调用
 - 使用 FreeRTOS 后台任务监控日程
 - 新增 SNTP 本地时间校准模块
@@ -54,7 +57,6 @@ typedef struct {
     int8_t hour;
     int8_t minute;
     int8_t task_id;
-    char task_name[32];
     int8_t enabled;
 } schedule_config_t;
 ```
@@ -68,21 +70,49 @@ esp_err_t schedule_save_from_ui(
     int8_t hour,
     int8_t minute,
     int8_t task_id,
-    const char *task_name,
     bool enabled
 );
 
 esp_err_t schedule_get_current(schedule_config_t *cfg);
 
 esp_err_t schedule_save_default(void);
+
+esp_err_t schedule_save_by_index(int index, const schedule_config_t *cfg);
+
+esp_err_t schedule_get_by_index(int index, schedule_config_t *cfg);
+
+esp_err_t schedule_get_all(schedule_config_t *list, int max_num, int *out_count);
+
+esp_err_t schedule_delete_by_index(int index);
+
+esp_err_t schedule_get_count(int *count);
+
+const char *schedule_get_task_name(int8_t task_id);
 ```
 
 说明：
 
 - `schedule_storage_init()` 用于初始化 NVS
-- `schedule_save_from_ui()` 是后续 LVGL 保存按钮可以调用的接口
-- `schedule_get_current()` 用于读取当前保存的日程
-- `schedule_save_default()` 在首次启动且没有日程时写入默认配置
+- `schedule_save_from_ui()` 是兼容接口，默认写入 index 0
+- `schedule_get_current()` 是兼容接口，默认读取 index 0
+- `schedule_save_by_index()` 用于保存指定 index 的日程
+- `schedule_get_all()` 用于读取当前全部日程，供 monitor 遍历
+- `schedule_delete_by_index()` 用于删除指定 index 的日程
+- `schedule_get_count()` 用于读取当前已保存日程数量
+- `schedule_get_task_name()` 用于把固定 `task_id` 映射为中文任务名称
+- `schedule_save_default()` 在首次启动且没有日程时写入 6 个 ASD 推荐日程
+
+NVS key 组织方式：
+
+```text
+schedule_count
+sch_0
+sch_1
+...
+sch_19
+```
+
+每个 `sch_x` 使用 `nvs_set_blob()` / `nvs_get_blob()` 保存一个 `schedule_config_t`。结构体中只包含 `hour`、`minute`、`task_id`、`enabled`，不保存 `task_name`。
 
 ### schedule_monitor
 
@@ -91,12 +121,13 @@ esp_err_t schedule_save_default(void);
 当前实现方式：
 
 - 创建一个 FreeRTOS task
-- 每秒读取一次 NVS 中的当前日程
+- 每秒读取一次 NVS 中的全部日程
 - 优先使用 `time_sync_get_now()` 获取真实北京时间
 - 如果 SNTP 时间未同步，使用模拟时间进行 fallback
-- 命中后打印提醒日志
+- 遍历最多 20 条日程并判断是否命中
+- 任意日程命中后打印提醒日志
 - 命中后通过 `schedule_event_send()` 发送 Queue 事件
-- 同一分钟内同一任务只触发一次，避免重复提醒
+- 每个日程同一分钟只触发一次，避免重复提醒
 
 当前模拟时间初始值：
 
@@ -107,10 +138,15 @@ esp_err_t schedule_save_default(void);
 默认日程为：
 
 ```text
-20:00
-```
+07:30 晨间洗漱穿衣
+08:00 早餐礼仪
+16:30 AI社交练习
+20:00 睡前刷牙
+20:30 阅读时间
+21:00 睡觉
+```（我还没想好，内容再议，先暂定二十个）
 
-因此烧录启动后大约等待 10 秒即可看到触发日志。
+无网络 fallback 测试时，模拟时间从 `19:59:50` 开始，因此启动后大约等待 10 秒即可看到 `20:00` 的默认日程触发日志。
 
 ### schedule_event
 
@@ -121,7 +157,6 @@ esp_err_t schedule_save_default(void);
 ```c
 typedef struct {
     int8_t task_id;
-    char task_name[32];
     int8_t hour;
     int8_t minute;
 } schedule_event_t;
@@ -286,10 +321,18 @@ esp_wifi
 LVGL 保存按钮回调中可调用：
 
 ```c
-schedule_save_from_ui(hour, minute, task_id, task_name, enabled);
+schedule_save_from_ui(hour, minute, task_id, enabled);
 ```
 
 建议 UI 和存储模块之间只通过该接口交互，不直接操作 NVS。
+
+如果 UI 后续实现日程列表，请使用：
+
+```c
+schedule_save_by_index(index, &cfg);
+schedule_get_all(list, MAX_SCHEDULE_NUM, &count);
+schedule_delete_by_index(index);
+```
 
 日程触发后，`schedule_monitor` 会通过 FreeRTOS Queue 发送 `schedule_event_t` 事件。UI 模块可以通过 `schedule_event_get_queue()` 获取 Queue 句柄并接收事件：
 
@@ -307,7 +350,7 @@ void ui_schedule_task(void *arg)
         if (xQueueReceive(queue, &event, portMAX_DELAY) == pdTRUE) {
             ui_show_schedule_card(
                 event.task_id,
-                event.task_name,
+                schedule_get_task_name(event.task_id),
                 event.hour,
                 event.minute
             );
@@ -406,6 +449,7 @@ Source    : REAL_TIME
 
 - 当前版本支持 SNTP 真实时间，也保留模拟时间 fallback
 - 当前提醒方式保留串口 `printf`，同时已通过 Queue 向 UI 发送事件
+- 当前最多支持 20 个日程，index 范围为 `0~19`
 - `schedule_storage` 的对外接口应保持稳定，便于 UI 模块调用
-- 如果修改默认日程后发现启动仍读取旧日程，需要先执行 `idf.py erase-flash`
+- 从旧版单日程 NVS 结构升级到多日程结构时，建议执行 `idf.py erase-flash` 后重新烧录，以写入新的默认 6 条日程
 - 源码中的中文注释建议统一保存为 UTF-8，避免不同终端显示乱码
