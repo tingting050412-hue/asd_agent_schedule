@@ -5,8 +5,11 @@ idf_component_register(
         "schedule_monitor.c"
         "schedule_event.c"
         "time_sync.c"
+        "wifi_manager.c"
     PRIV_REQUIRES
         nvs_flash
+        esp_wifi
+        esp_event
         esp_netif
         lwip
     INCLUDE_DIRS

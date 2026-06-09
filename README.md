@@ -16,6 +16,7 @@
 - 提供 UI 保存接口，便于后续 LVGL 回调调用
 - 使用 FreeRTOS 后台任务监控日程
 - 新增 SNTP 本地时间校准模块
+- 新增 Wi-Fi Station 连接模块
 - 支持北京时间 UTC+8
 - 有网络且 Wi-Fi 已连接时使用真实时间
 - 无网络或尚未完成 SNTP 校时时，自动使用模拟时间 fallback
@@ -41,7 +42,9 @@
     ├── schedule_event.c
     ├── schedule_event.h
     ├── time_sync.c
-    └── time_sync.h
+    ├── time_sync.h
+    ├── wifi_manager.c
+    └── wifi_manager.h
 ```
 
 ## 模块说明
@@ -192,6 +195,32 @@ esp_err_t time_sync_get_now(int *hour, int *minute, int *second);
 - 若时间尚未同步，`time_sync_get_now()` 返回 `ESP_FAIL`
 - 当前 `schedule_monitor` 会在时间无效时自动使用模拟时间 fallback
 
+### wifi_manager
+
+负责 Wi-Fi Station 模式连接。
+
+主要接口：
+
+```c
+esp_err_t wifi_manager_init(void);
+bool wifi_manager_is_connected(void);
+```
+
+说明：
+
+- 当前 Wi-Fi SSID 和密码暂时在 `main/wifi_manager.c` 顶部配置
+- `WIFI_EVENT_STA_START` 时调用 `esp_wifi_connect()`
+- `WIFI_EVENT_STA_DISCONNECTED` 时自动重连，最多重试 5 次
+- `IP_EVENT_STA_GOT_IP` 时表示成功联网，会打印 IP 地址
+- 只有拿到 IP 后才调用 `time_sync_init()` 启动 SNTP
+
+配置位置：
+
+```c
+#define WIFI_SSID "你的WiFi名称"
+#define WIFI_PASS "你的WiFi密码"
+```
+
 ## 构建与烧录
 
 进入项目目录：
@@ -287,6 +316,49 @@ idf.py erase-flash
 idf.py build flash monitor
 ```
 
+### 5. Wi-Fi 连接测试
+
+在 `main/wifi_manager.c` 顶部配置 Wi-Fi：
+
+```c
+#define WIFI_SSID "你的WiFi名称"
+#define WIFI_PASS "你的WiFi密码"
+```
+
+如果 Wi-Fi 名称或密码错误，预期现象：
+
+```text
+retry to connect to the AP
+failed to connect to SSID:...
+MOCK_TIME: ...
+```
+
+这表示 Wi-Fi 未连接成功，但日程监控仍会继续使用模拟时间 fallback。
+
+如果 Wi-Fi 配置正确，预期现象：
+
+```text
+got ip:xxx.xxx.xxx.xxx
+```
+
+拿到 IP 后，`wifi_manager` 会自动调用 `time_sync_init()` 启动 SNTP。
+
+### 6. SNTP 真实时间测试
+
+Wi-Fi 成功连接并完成 SNTP 校时后，预期 `schedule_monitor` 日志从：
+
+```text
+MOCK_TIME: ...
+```
+
+切换为：
+
+```text
+REAL_TIME: ...
+```
+
+这表示当前日程监控正在使用北京时间。到达任意已启用日程时间后，仍会通过 `schedule_event_send()` 发送 Queue 事件给 UI。
+
 ## 当前 CMake 配置
 
 `main/CMakeLists.txt` 当前需要包含：
@@ -299,8 +371,11 @@ idf_component_register(
         "schedule_monitor.c"
         "schedule_event.c"
         "time_sync.c"
+        "wifi_manager.c"
     PRIV_REQUIRES
         nvs_flash
+        esp_wifi
+        esp_event
         esp_netif
         lwip
     INCLUDE_DIRS
@@ -399,7 +474,7 @@ time_sync_init();
 
 ### 无网络测试
 
-不连接 Wi-Fi，直接烧录运行：
+不配置正确 Wi-Fi，或故意使用错误密码后烧录运行：
 
 ```powershell
 idf.py build flash monitor
@@ -408,6 +483,7 @@ idf.py build flash monitor
 预期日志中会看到：
 
 ```text
+failed to connect to SSID:...
 MOCK_TIME: 19:59:xx | Schedule: 20:00 ...
 ```
 
@@ -420,19 +496,20 @@ Source    : MOCK_TIME
 
 ### 有网络测试
 
-当前工程还没有 Wi-Fi 模块。有网络测试需要队友的 Wi-Fi 模块先完成连接，再调用 `time_sync_init()`。
+先在 `main/wifi_manager.c` 顶部配置 Wi-Fi：
 
-推荐后续顺序：
-
-```text
-Wi-Fi connected
-    ↓
-time_sync_init()
-    ↓
-schedule_monitor 使用 REAL_TIME
+```c
+#define WIFI_SSID "你的WiFi名称"
+#define WIFI_PASS "你的WiFi密码"
 ```
 
-SNTP 同步成功后，日志应显示：
+烧录后，成功拿到 IP 时会看到：
+
+```text
+got ip:xxx.xxx.xxx.xxx
+```
+
+`wifi_manager` 会在 `IP_EVENT_STA_GOT_IP` 事件中调用 `time_sync_init()`。SNTP 同步成功后，monitor 日志应显示：
 
 ```text
 REAL_TIME: HH:MM:SS | Schedule: ...

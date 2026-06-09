@@ -11,6 +11,8 @@
 - `schedule_storage`：负责最多 20 个日程配置的 NVS 持久化，并提供 `task_id` 到任务名称的映射。
 - `schedule_monitor`：负责后台时间监测和日程匹配。
 - `schedule_event`：负责把触发结果转换为事件并发送到 FreeRTOS Queue。
+- `wifi_manager`：负责 Wi-Fi Station 连接，拿到 IP 后启动 SNTP。
+- `time_sync`：负责 SNTP 校时和北京时间读取。
 - `UI`：后续由 LVGL 模块实现，负责输入日程和显示提醒卡片。
 - `AI/TTS`：后续根据日程任务生成引导语并播报。
 
@@ -75,17 +77,16 @@ LVGL UI
 ## Full Target Architecture
 
 ```text
-                  ┌──────────────┐
-                  │   LVGL UI    │
-                  └──────┬───────┘
-                         │ save schedule
+              ┌──────────────────────┐
+              │     wifi_manager     │
+              └──────────┬───────────┘
+                         │ got ip
                          ↓
               ┌──────────────────────┐
-              │   schedule_storage   │
+              │      time_sync       │
               └──────────┬───────────┘
+                         │ real time
                          ↓
-                       NVS
-
               ┌──────────────────────┐
               │   schedule_monitor   │
               └──────────┬───────────┘
@@ -99,10 +100,22 @@ LVGL UI
                   ┌──────┴───────┐
                   ↓              ↓
               LVGL UI         AI/TTS
+
+                  ┌──────────────┐
+                  │   LVGL UI    │
+                  └──────┬───────┘
+                         │ save schedule
+                         ↓
+              ┌──────────────────────┐
+              │   schedule_storage   │
+              └──────────┬───────────┘
+                         ↓
+                       NVS
+
 ```
 
 ## Extension Points
 
-- Real time: replace mock time in `schedule_monitor` with SNTP and RTC based time.
+- Real time: `wifi_manager` starts Wi-Fi, then `time_sync` starts SNTP after IP is acquired.
 - UI card: consume `schedule_event_t` from Queue and render LVGL reminder cards.
 - AI/TTS: consume the same event or receive forwarded `task_id` from UI/event layer.

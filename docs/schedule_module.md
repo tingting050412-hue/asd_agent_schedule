@@ -195,7 +195,7 @@ idf.py build flash monitor
 
 ## SNTP Extension Plan
 
-后续建议新增独立时间模块：
+当前已新增独立时间模块：
 
 ```text
 schedule_time.c
@@ -219,16 +219,20 @@ esp_err_t schedule_time_get_beijing(struct tm *timeinfo);
 
 `schedule_monitor` 后续只调用时间模块获取当前时间，不直接处理 Wi-Fi、SNTP 或时区细节。
 
-推荐初始化顺序：
+当前初始化顺序：
 
 ```text
 schedule_storage_init()
     ↓
 schedule_event_init()
     ↓
-Wi-Fi connected
+wifi_manager_init()
     ↓
-schedule_time_sync_start()
+IP_EVENT_STA_GOT_IP
+    ↓
+time_sync_init()
     ↓
 schedule_monitor_start()
 ```
+
+无 Wi-Fi 或密码错误时，`schedule_monitor` 会继续使用 `MOCK_TIME` fallback。

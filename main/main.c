@@ -5,7 +5,7 @@
 #include "schedule_event.h"
 #include "schedule_monitor.h"
 #include "schedule_storage.h"
-#include "time_sync.h"
+#include "wifi_manager.h"
 
 static void print_schedule_list(void)
 {
@@ -70,14 +70,9 @@ void app_main(void)
         return;
     }
 
-    /*
-     * Wi-Fi will be integrated by another module later.
-     * Keep this call here for now so SNTP can start when networking is ready.
-     * After Wi-Fi integration, move time_sync_init() to the Wi-Fi connected callback.
-     */
-    err = time_sync_init();
+    err = wifi_manager_init();
     if (err != ESP_OK) {
-        printf("SNTP time sync is not ready: %s\n", esp_err_to_name(err));
+        printf("Failed to initialize Wi-Fi manager: %s\n", esp_err_to_name(err));
         printf("Schedule monitor will use mock time fallback.\n");
     }
 
