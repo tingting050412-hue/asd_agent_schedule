@@ -13,6 +13,8 @@ esp_err_t time_sync_init(void);
 
 bool time_sync_is_valid(void);
 
+bool time_sync_is_coasting(void);
+
 esp_err_t time_sync_get_now(int *hour, int *minute, int *second);
 
 #ifdef __cplusplus

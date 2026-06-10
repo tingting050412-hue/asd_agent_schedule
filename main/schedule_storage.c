@@ -19,7 +19,7 @@ static bool is_valid_index(int index)
 
 static bool is_valid_task_id(int8_t task_id)
 {
-    return (task_id >= TASK_WAKE_UP && task_id <= TASK_SLEEP);
+    return (task_id >= TASK_MORNING_ROUTINE && task_id <= TASK_MED_EVENING);
 }
 
 static bool is_valid_schedule(const schedule_config_t *cfg)
@@ -78,6 +78,27 @@ static esp_err_t write_count_to_handle(nvs_handle_t handle, int count)
     return nvs_set_i32(handle, KEY_SCHEDULE_COUNT, count);
 }
 
+static esp_err_t erase_schedule_namespace(void)
+{
+    nvs_handle_t handle;
+    esp_err_t err = nvs_open(SCHEDULE_NAMESPACE, NVS_READWRITE, &handle);
+
+    if (err == ESP_ERR_NVS_NOT_FOUND) {
+        return ESP_OK;
+    }
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    err = nvs_erase_all(handle);
+    if (err == ESP_OK) {
+        err = nvs_commit(handle);
+    }
+
+    nvs_close(handle);
+    return err;
+}
+
 esp_err_t schedule_storage_init(void)
 {
     esp_err_t err = nvs_flash_init();
@@ -85,6 +106,21 @@ esp_err_t schedule_storage_init(void)
     if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_ERROR_CHECK(nvs_flash_erase());
         err = nvs_flash_init();
+    }
+
+    if (err == ESP_OK) {
+        schedule_config_t list[MAX_SCHEDULE_NUM];
+        int count = 0;
+
+        err = schedule_get_all(list, MAX_SCHEDULE_NUM, &count);
+        if (err == ESP_ERR_INVALID_SIZE || err == ESP_ERR_INVALID_ARG) {
+            printf("Stored schedules are incompatible. Rebuilding defaults.\n");
+
+            err = erase_schedule_namespace();
+            if (err == ESP_OK) {
+                err = schedule_save_default();
+            }
+        }
     }
 
     return err;
@@ -353,12 +389,26 @@ esp_err_t schedule_get_current(schedule_config_t *cfg)
 esp_err_t schedule_save_default(void)
 {
     static const schedule_config_t defaults[] = {
-        {7, 30, TASK_WAKE_UP, 1},
-        {8, 0, TASK_BREAKFAST, 1},
-        {16, 30, TASK_SOCIAL_TRAIN, 1},
-        {20, 0, TASK_BRUSH_TEETH, 1},
-        {20, 30, TASK_READING, 1},
-        {21, 0, TASK_SLEEP, 1},
+        { 7,  0, TASK_MORNING_ROUTINE,  1},  /* 晨起洗漱常规         */
+        { 7, 15, TASK_DRESSING,         1},  /* 穿衣动作拆解         */
+        { 8,  0, TASK_MED_MORNING,      0},  /* 早晨用药（默认关闭） */
+        {10,  0, TASK_TOILET_AM,        1},  /* 如厕引导（上午）     */
+        {10, 30, TASK_SENSORY,          0},  /* 感觉统合（默认关闭） */
+        {11, 55, TASK_LUNCH_TRANSITION, 1},  /* 午餐前5分钟过渡      */
+        {12,  0, TASK_LUNCH,            1},  /* 午餐用餐常规         */
+        {14,  0, TASK_AFTERNOON_HUG,    1},  /* 下午放松与拥抱       */
+        {15,  0, TASK_BREATHING,        1},  /* 深呼吸时间           */
+        {15, 30, TASK_TOILET_PM,        1},  /* 如厕引导（下午）     */
+        {16,  0, TASK_HYDRATION,        1},  /* 补充水分和零食       */
+        {16, 30, TASK_AI_CHAT,          1},  /* AI谈心               */
+        {16, 55, TASK_ACTIVITY_END,     1},  /* 娱乐结束倒计时       */
+        {17,  0, TASK_TOY_CLEANUP,      1},  /* 玩具回自己的家       */
+        {18, 30, TASK_READING,          1},  /* 绘本时间             */
+        {19,  0, TASK_SHARE_MOMENT,     1},  /* 分享小行为时间       */
+        {19, 15, TASK_AI_SOCIAL,        1},  /* AI模拟社交对对碰     */
+        {19, 30, TASK_MED_EVENING,      0},  /* 晚间用药（默认关闭） */
+        {20,  0, TASK_BEDTIME_PREP,     1},  /* 睡前准备常规         */
+        {20, 30, TASK_SLEEP_RITUAL,     1},  /* 关灯睡觉仪式         */
     };
 
     for (int i = 0; i < (int)(sizeof(defaults) / sizeof(defaults[0])); i++) {
@@ -374,19 +424,26 @@ esp_err_t schedule_save_default(void)
 const char *schedule_get_task_name(int8_t task_id)
 {
     switch (task_id) {
-    case TASK_WAKE_UP:
-        return "晨间洗漱穿衣";
-    case TASK_BREAKFAST:
-        return "早餐礼仪";
-    case TASK_SOCIAL_TRAIN:
-        return "AI社交练习";
-    case TASK_BRUSH_TEETH:
-        return "睡前刷牙";
-    case TASK_READING:
-        return "阅读时间";
-    case TASK_SLEEP:
-        return "睡觉";
-    default:
-        return "未知日程";
+    case TASK_MORNING_ROUTINE:  return "晨起洗漱常规";
+    case TASK_DRESSING:         return "穿衣动作拆解";
+    case TASK_TOILET_AM:        return "如厕引导（上午）";
+    case TASK_LUNCH:            return "午餐用餐常规";
+    case TASK_TOILET_PM:        return "如厕引导（下午）";
+    case TASK_HYDRATION:        return "补充水分和零食";
+    case TASK_BEDTIME_PREP:     return "睡前准备常规";
+    case TASK_SLEEP_RITUAL:     return "关灯睡觉仪式";
+    case TASK_LUNCH_TRANSITION: return "午餐前5分钟过渡";
+    case TASK_AFTERNOON_HUG:    return "下午放松与拥抱";
+    case TASK_ACTIVITY_END:     return "娱乐结束倒计时";
+    case TASK_AI_CHAT:          return "AI谈心";
+    case TASK_SHARE_MOMENT:     return "分享小行为时间";
+    case TASK_AI_SOCIAL:        return "AI模拟社交对对碰";
+    case TASK_TOY_CLEANUP:      return "玩具回自己的家";
+    case TASK_READING:          return "绘本时间";
+    case TASK_BREATHING:        return "深呼吸时间";
+    case TASK_SENSORY:          return "感觉统合转换练习";
+    case TASK_MED_MORNING:      return "早晨用药";
+    case TASK_MED_EVENING:      return "晚间用药";
+    default:                    return "未知日程";
     }
 }

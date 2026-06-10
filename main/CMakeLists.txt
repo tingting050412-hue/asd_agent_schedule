@@ -12,6 +12,7 @@ idf_component_register(
         esp_event
         esp_netif
         lwip
+        esp_timer
     INCLUDE_DIRS
         "."
 )

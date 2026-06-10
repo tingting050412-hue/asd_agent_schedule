@@ -10,7 +10,7 @@
 已实现：
 
 - 使用 NVS 持久化保存日程配置，最多 20 条
-- 日程任务类型固定（6 种），NVS 只保存 `task_id`，不保存字符串
+- 日程任务类型固定（6 种可选），家长不能自定义任务名称，但同一种任务可在不同时间多次使用，NVS 只保存 `task_id`，不保存字符串
 - `schedule_get_task_name(task_id)` 在运行时映射中文任务名称
 - FreeRTOS 后台任务每秒检查日程，命中时触发一次，同分钟内不重复
 - 优先使用 SNTP 北京时间（UTC+8），未联网时自动切换到模拟时间 fallback
@@ -42,28 +42,58 @@
     ├── wifi_manager.c    / .h   # Wi-Fi Station 连接
 ```
 
-## 固定任务 ID
+## 固定任务 ID（共 20 种）
 
-```c
-#define TASK_WAKE_UP       1   // 晨间洗漱穿衣
-#define TASK_BREAKFAST     2   // 早餐礼仪
-#define TASK_SOCIAL_TRAIN  3   // AI社交练习
-#define TASK_BRUSH_TEETH   4   // 睡前刷牙
-#define TASK_READING       5   // 阅读时间
-#define TASK_SLEEP         6   // 睡觉
-```
+家长可通过 UI 对每条日程独立设置**是否启用**和**提醒时间**，但任务名称固定不可自定义。
 
-## 默认日程
+| task_id | 宏名 | 任务名称 | 默认时间 | 默认状态 | 干预类别 |
+|---------|------|----------|----------|----------|----------|
+| 10 | `TASK_MORNING_ROUTINE`  | 晨起洗漱常规       | 07:00 | 开启 | 生活自理 |
+| 11 | `TASK_DRESSING`         | 穿衣动作拆解       | 07:15 | 开启 | 生活自理 |
+| 12 | `TASK_TOILET_AM`        | 如厕引导（上午）   | 10:00 | 开启 | 生活自理 |
+| 13 | `TASK_LUNCH`            | 午餐用餐常规       | 12:00 | 开启 | 生活自理 |
+| 14 | `TASK_TOILET_PM`        | 如厕引导（下午）   | 15:30 | 开启 | 生活自理 |
+| 15 | `TASK_HYDRATION`        | 补充水分和零食     | 16:00 | 开启 | 生活自理 |
+| 16 | `TASK_BEDTIME_PREP`     | 睡前准备常规       | 20:00 | 开启 | 生活自理 |
+| 17 | `TASK_SLEEP_RITUAL`     | 关灯睡觉仪式       | 20:30 | 开启 | 生活自理 |
+| 20 | `TASK_LUNCH_TRANSITION` | 午餐前5分钟过渡    | 11:55 | 开启 | 过渡缓冲 |
+| 21 | `TASK_AFTERNOON_HUG`    | 下午放松与拥抱     | 14:00 | 开启 | 过渡缓冲 |
+| 22 | `TASK_ACTIVITY_END`     | 娱乐结束倒计时     | 16:55 | 开启 | 过渡缓冲 |
+| 30 | `TASK_AI_CHAT`          | AI谈心             | 16:30 | 开启 | 社交语言 |
+| 31 | `TASK_SHARE_MOMENT`     | 分享小行为时间     | 19:00 | 开启 | 社交语言 |
+| 32 | `TASK_AI_SOCIAL`        | AI模拟社交对对碰   | 19:15 | 开启 | 社交语言 |
+| 40 | `TASK_TOY_CLEANUP`      | 玩具回自己的家     | 17:00 | 开启 | 认知专注 |
+| 41 | `TASK_READING`          | 绘本时间           | 18:30 | 开启 | 认知专注 |
+| 50 | `TASK_BREATHING`        | 深呼吸时间         | 15:00 | 开启 | 感觉统合 |
+| 51 | `TASK_SENSORY`          | 感觉统合转换练习   | 10:30 | **关闭** | 感觉统合 |
+| 60 | `TASK_MED_MORNING`      | 早晨用药           | 08:00 | **关闭** | 用药提醒 |
+| 61 | `TASK_MED_EVENING`      | 晚间用药           | 19:30 | **关闭** | 用药提醒 |
 
-首次启动（NVS 为空）时自动写入：
+> `task_id 51 / 60 / 61` 默认关闭，需家长在 UI 中手动启用。
+
+## 默认日程（首次启动自动写入，共 20 条）
 
 ```text
-index 0 — 07:30  晨间洗漱穿衣
-index 1 — 08:00  早餐礼仪
-index 2 — 16:30  AI社交练习
-index 3 — 20:00  睡前刷牙
-index 4 — 20:30  阅读时间
-index 5 — 21:00  睡觉
+index  0 — 07:00  晨起洗漱常规       (id=10) ✓
+index  1 — 07:15  穿衣动作拆解       (id=11) ✓
+index  2 — 08:00  早晨用药           (id=60) ✗ 默认关闭
+index  3 — 10:00  如厕引导（上午）   (id=12) ✓
+index  4 — 10:30  感觉统合转换练习   (id=51) ✗ 默认关闭
+index  5 — 11:55  午餐前5分钟过渡    (id=20) ✓
+index  6 — 12:00  午餐用餐常规       (id=13) ✓
+index  7 — 14:00  下午放松与拥抱     (id=21) ✓
+index  8 — 15:00  深呼吸时间         (id=50) ✓
+index  9 — 15:30  如厕引导（下午）   (id=14) ✓
+index 10 — 16:00  补充水分和零食     (id=15) ✓
+index 11 — 16:30  AI谈心             (id=30) ✓
+index 12 — 16:55  娱乐结束倒计时     (id=22) ✓
+index 13 — 17:00  玩具回自己的家     (id=40) ✓
+index 14 — 18:30  绘本时间           (id=41) ✓
+index 15 — 19:00  分享小行为时间     (id=31) ✓
+index 16 — 19:15  AI模拟社交对对碰   (id=32) ✓
+index 17 — 19:30  晚间用药           (id=61) ✗ 默认关闭
+index 18 — 20:00  睡前准备常规       (id=16) ✓
+index 19 — 20:30  关灯睡觉仪式       (id=17) ✓
 ```
 
 ## 模块说明
@@ -109,8 +139,8 @@ const char  *schedule_get_task_name(int8_t task_id);
 
 FreeRTOS 后台任务，每秒检查日程。
 
-- 优先调用 `time_sync_get_now()` 获取真实北京时间（`REAL_TIME`）
-- `time_sync_is_valid()` 返回 false 时切换为模拟时间（`MOCK_TIME`），初始值 `19:59:50`
+- 调用 `time_sync_get_now()` 获取真实北京时间
+- SNTP 尚未同步时打印 `Waiting for time sync...` 并跳过本轮，不触发任何日程
 - 遍历全部 enabled 日程，hour/minute 命中时调用 `schedule_event_send()`
 - 通过 `s_last_trigger_*` 数组保证同一分钟只触发一次
 
@@ -220,21 +250,15 @@ Saved schedules: 6
 Schedule monitor started.
 ```
 
-### 2. 模拟时间触发测试（无 Wi-Fi）
+### 2. 无网络时的行为
 
-模拟时间从 `19:59:50` 开始，约 10 秒后触发 `20:00` 日程：
+Wi-Fi 未连接或 SNTP 尚未同步时，monitor 每秒打印：
 
 ```text
-MOCK_TIME: 20:00:00 | Schedule count: 6
-
-========== Schedule Triggered ==========
-Source    : MOCK_TIME
-Index     : 3
-Time      : 20:00:00
-Task ID   : 4
-Task Name : 睡前刷牙
-========================================
+Waiting for time sync...
 ```
+
+不会触发任何日程，等待联网校时完成后自动恢复正常。
 
 ### 3. Wi-Fi + SNTP 真实时间测试
 
