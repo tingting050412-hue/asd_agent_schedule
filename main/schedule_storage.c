@@ -408,7 +408,7 @@ esp_err_t schedule_save_default(void)
         {19, 15, TASK_AI_SOCIAL,        1},  /* AI模拟社交对对碰     */
         {19, 30, TASK_MED_EVENING,      0},  /* 晚间用药（默认关闭） */
         {20,  0, TASK_BEDTIME_PREP,     1},  /* 睡前准备常规         */
-        {20, 30, TASK_SLEEP_RITUAL,     1},  /* 关灯睡觉仪式         */
+        {21, 12, TASK_SLEEP_RITUAL,     1},  /* 关灯睡觉仪式         */
     };
 
     for (int i = 0; i < (int)(sizeof(defaults) / sizeof(defaults[0])); i++) {

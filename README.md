@@ -119,6 +119,8 @@ schedule_delete_by_index(index);
 **UI 接收触发事件：**
 
 ```c
+#include "schedule_event.h"   // 已自动包含 time_sync.h
+
 void ui_schedule_task(void *arg)
 {
     QueueHandle_t queue = schedule_event_get_queue();
@@ -126,8 +128,21 @@ void ui_schedule_task(void *arg)
     while (1) {
         if (xQueueReceive(queue, &event, portMAX_DELAY) == pdTRUE) {
             const char *name = schedule_get_task_name(event.task_id);
+            // event.hour / event.minute 即触发时的当前时间
             // 根据 task_id 显示提醒卡片、触发 AI/TTS
         }
     }
 }
+```
+
+**UI 实时时钟显示（在 UI 刷新回调中调用）：**
+
+```c
+#include "time_sync.h"
+
+int h, m, s;
+if (time_sync_get_now(&h, &m, &s) == ESP_OK) {
+    // 更新屏幕上的时钟控件，显示 h:m
+}
+// time_sync_is_coasting() == true 时可显示"估算时间"提示
 ```
