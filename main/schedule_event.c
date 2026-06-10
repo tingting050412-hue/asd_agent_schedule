@@ -37,8 +37,6 @@ esp_err_t schedule_event_send(const schedule_config_t *cfg)
         .hour = cfg->hour,
         .minute = cfg->minute,
     };
-    strncpy(event.task_name, cfg->task_name, sizeof(event.task_name) - 1);
-    event.task_name[sizeof(event.task_name) - 1] = '\0';
 
     if (xQueueSend(s_schedule_event_queue, &event, 0) != pdTRUE) {
         return ESP_FAIL;

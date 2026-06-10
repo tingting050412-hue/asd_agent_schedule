@@ -1,50 +1,69 @@
-# ASD Schedule Storage Files
+# ASD Schedule Storage — 面向 ASD 儿童的日程提醒模块
 
-面向自闭症儿童（ASD）的桌面智能体日程提醒模块示例工程。
+面向自闭症儿童（ASD）的桌面智能体日程提醒模块。
 
-本项目基于 ESP-IDF 和 C 语言开发，当前运行平台为 ESP32-P4-Function-EV-Board。当前代码重点实现“日程配置持久化保存”和“后台日程触发检测”，后续可继续对接 LVGL UI、AI 对话和 TTS 播报模块。
+本项目基于 ESP-IDF（C 语言）开发，运行平台为 **ESP32-P4-Function-EV-Board**。  
+当前模块负责日程配置持久化、后台时间匹配和触发事件通知，后续可继续对接 LVGL UI、AI 对话和 TTS 播报模块。
 
 ## 功能概述
 
-当前已实现：
+已实现：
 
-- 使用 ESP-IDF NVS 保存日程配置
-- 设备重启后可从 NVS 读取已保存日程
-- 最多支持 20 个日程
-- 日程任务类型固定，家长只能从预设任务中选择
-- NVS 只保存 `task_id`，不保存任务名称字符串
-- 提供 UI 保存接口，便于后续 LVGL 回调调用
-- 使用 FreeRTOS 后台任务监控日程
-- 新增 SNTP 本地时间校准模块
-- 新增 Wi-Fi Station 连接模块
-- 支持北京时间 UTC+8
-- 有网络且 Wi-Fi 已连接时使用真实时间
-- 无网络或尚未完成 SNTP 校时时，自动使用模拟时间 fallback
-- 当时间命中保存的日程时间时，通过串口日志输出提醒，并发送 Queue 事件给 UI
+- 使用 NVS 持久化保存日程配置，最多 20 条
+- 日程任务类型固定（6 种），NVS 只保存 `task_id`，不保存字符串
+- `schedule_get_task_name(task_id)` 在运行时映射中文任务名称
+- FreeRTOS 后台任务每秒检查日程，命中时触发一次，同分钟内不重复
+- 优先使用 SNTP 北京时间（UTC+8），未联网时自动切换到模拟时间 fallback
+- Wi-Fi Station 模式连接，支持 WPA2/WPA3 混合认证（SAE）
+- ESP32-P4 通过板载 ESP32-C6 实现 Host Wi-Fi（`esp_hosted` + `esp_wifi_remote`）
+- Wi-Fi 获取 IP 后自动启动 SNTP 校时
+- 日程触发后通过 FreeRTOS Queue 向 UI 发送 `schedule_event_t` 事件
 
-计划实现：
+待实现（队友负责）：
 
-- 触发日程后显示 LVGL 卡片
-- 触发日程后向 AI/TTS 模块发送 `task_id`
+- UI 收到事件后显示 LVGL 日程提醒卡片
+- AI/TTS 根据 `task_id` 生成并播报引导语
 
 ## 工程结构
 
 ```text
 .
 ├── CMakeLists.txt
-└── main
+├── dependencies.lock
+├── managed_components/          # IDF Component Manager 托管组件（esp_hosted、esp_wifi_remote 等）
+└── main/
     ├── CMakeLists.txt
+    ├── idf_component.yml        # 声明 esp_hosted / esp_wifi_remote 依赖
     ├── main.c
-    ├── schedule_storage.c
-    ├── schedule_storage.h
-    ├── schedule_monitor.c
-    └── schedule_monitor.h
-    ├── schedule_event.c
-    ├── schedule_event.h
-    ├── time_sync.c
-    ├── time_sync.h
-    ├── wifi_manager.c
-    └── wifi_manager.h
+    ├── schedule_storage.c / .h  # NVS 日程存储 + task_id 映射
+    ├── schedule_monitor.c / .h  # FreeRTOS 后台时间检测
+    ├── schedule_event.c  / .h   # FreeRTOS Queue 事件通知
+    ├── time_sync.c       / .h   # SNTP 校时 + 北京时间获取
+    ├── wifi_manager.c    / .h   # Wi-Fi Station 连接
+```
+
+## 固定任务 ID
+
+```c
+#define TASK_WAKE_UP       1   // 晨间洗漱穿衣
+#define TASK_BREAKFAST     2   // 早餐礼仪
+#define TASK_SOCIAL_TRAIN  3   // AI社交练习
+#define TASK_BRUSH_TEETH   4   // 睡前刷牙
+#define TASK_READING       5   // 阅读时间
+#define TASK_SLEEP         6   // 睡觉
+```
+
+## 默认日程
+
+首次启动（NVS 为空）时自动写入：
+
+```text
+index 0 — 07:30  晨间洗漱穿衣
+index 1 — 08:00  早餐礼仪
+index 2 — 16:30  AI社交练习
+index 3 — 20:00  睡前刷牙
+index 4 — 20:30  阅读时间
+index 5 — 21:00  睡觉
 ```
 
 ## 模块说明
@@ -53,7 +72,7 @@
 
 负责日程配置的持久化存储。
 
-保存的数据结构：
+数据结构：
 
 ```c
 typedef struct {
@@ -67,93 +86,37 @@ typedef struct {
 主要接口：
 
 ```c
-esp_err_t schedule_storage_init(void);
-
-esp_err_t schedule_save_from_ui(
-    int8_t hour,
-    int8_t minute,
-    int8_t task_id,
-    bool enabled
-);
-
-esp_err_t schedule_get_current(schedule_config_t *cfg);
-
-esp_err_t schedule_save_default(void);
-
-esp_err_t schedule_save_by_index(int index, const schedule_config_t *cfg);
-
-esp_err_t schedule_get_by_index(int index, schedule_config_t *cfg);
-
-esp_err_t schedule_get_all(schedule_config_t *list, int max_num, int *out_count);
-
-esp_err_t schedule_delete_by_index(int index);
-
-esp_err_t schedule_get_count(int *count);
-
-const char *schedule_get_task_name(int8_t task_id);
+esp_err_t    schedule_storage_init(void);
+esp_err_t    schedule_save_from_ui(int8_t hour, int8_t minute, int8_t task_id, bool enabled);
+esp_err_t    schedule_save_by_index(int index, const schedule_config_t *cfg);
+esp_err_t    schedule_get_by_index(int index, schedule_config_t *cfg);
+esp_err_t    schedule_get_all(schedule_config_t *list, int max_num, int *out_count);
+esp_err_t    schedule_delete_by_index(int index);
+esp_err_t    schedule_get_count(int *count);
+esp_err_t    schedule_get_current(schedule_config_t *cfg);
+esp_err_t    schedule_save_default(void);
+const char  *schedule_get_task_name(int8_t task_id);
 ```
 
 说明：
 
-- `schedule_storage_init()` 用于初始化 NVS
-- `schedule_save_from_ui()` 是兼容接口，默认写入 index 0
-- `schedule_get_current()` 是兼容接口，默认读取 index 0
-- `schedule_save_by_index()` 用于保存指定 index 的日程
-- `schedule_get_all()` 用于读取当前全部日程，供 monitor 遍历
-- `schedule_delete_by_index()` 用于删除指定 index 的日程
-- `schedule_get_count()` 用于读取当前已保存日程数量
-- `schedule_get_task_name()` 用于把固定 `task_id` 映射为中文任务名称
-- `schedule_save_default()` 在首次启动且没有日程时写入 6 个 ASD 推荐日程
-
-NVS key 组织方式：
-
-```text
-schedule_count
-sch_0
-sch_1
-...
-sch_19
-```
-
-每个 `sch_x` 使用 `nvs_set_blob()` / `nvs_get_blob()` 保存一个 `schedule_config_t`。结构体中只包含 `hour`、`minute`、`task_id`、`enabled`，不保存 `task_name`。
+- `schedule_save_from_ui()` 是兼容接口，固定写入 index 0；UI 多条管理请直接使用 `schedule_save_by_index()`
+- `schedule_get_current()` 是兼容接口，固定读取 index 0
+- NVS namespace 为 `"schedule"`，key 格式为 `schedule_count` + `sch_0` … `sch_19`
+- 每条日程使用 `nvs_set_blob()` / `nvs_get_blob()` 存取，不保存字符串
 
 ### schedule_monitor
 
-负责后台检查日程是否到达。
+FreeRTOS 后台任务，每秒检查日程。
 
-当前实现方式：
-
-- 创建一个 FreeRTOS task
-- 每秒读取一次 NVS 中的全部日程
-- 优先使用 `time_sync_get_now()` 获取真实北京时间
-- 如果 SNTP 时间未同步，使用模拟时间进行 fallback
-- 遍历最多 20 条日程并判断是否命中
-- 任意日程命中后打印提醒日志
-- 命中后通过 `schedule_event_send()` 发送 Queue 事件
-- 每个日程同一分钟只触发一次，避免重复提醒
-
-当前模拟时间初始值：
-
-```c
-19:59:50
-```
-
-默认日程为：
-
-```text
-07:30 晨间洗漱穿衣
-08:00 早餐礼仪
-16:30 AI社交练习
-20:00 睡前刷牙
-20:30 阅读时间
-21:00 睡觉
-```（我还没想好，内容再议，先暂定二十个）
-
-无网络 fallback 测试时，模拟时间从 `19:59:50` 开始，因此启动后大约等待 10 秒即可看到 `20:00` 的默认日程触发日志。
+- 优先调用 `time_sync_get_now()` 获取真实北京时间（`REAL_TIME`）
+- `time_sync_is_valid()` 返回 false 时切换为模拟时间（`MOCK_TIME`），初始值 `19:59:50`
+- 遍历全部 enabled 日程，hour/minute 命中时调用 `schedule_event_send()`
+- 通过 `s_last_trigger_*` 数组保证同一分钟只触发一次
 
 ### schedule_event
 
-负责把日程触发结果转换为 FreeRTOS Queue 事件，供 UI 模块接收。
+将日程触发结果打包为 FreeRTOS Queue 事件，供 UI 接收。
 
 事件结构体：
 
@@ -168,365 +131,185 @@ typedef struct {
 主要接口：
 
 ```c
-esp_err_t schedule_event_init(void);
-esp_err_t schedule_event_send(const schedule_config_t *cfg);
+esp_err_t     schedule_event_init(void);
+esp_err_t     schedule_event_send(const schedule_config_t *cfg);
 QueueHandle_t schedule_event_get_queue(void);
 ```
 
 ### time_sync
 
-负责 SNTP 时间同步和北京时间获取。
-
-主要接口：
+SNTP 校时与北京时间获取。
 
 ```c
 esp_err_t time_sync_init(void);
-bool time_sync_is_valid(void);
+bool      time_sync_is_valid(void);
 esp_err_t time_sync_get_now(int *hour, int *minute, int *second);
 ```
 
-说明：
-
-- `time_sync_init()` 启动 SNTP，不写死 Wi-Fi SSID 和密码
-- 当前 Wi-Fi 模块尚未接入，`time_sync_init()` 暂时在 `app_main()` 中调用
-- 后续队友接入 Wi-Fi 后，建议把 `time_sync_init()` 移动到 Wi-Fi connected 事件之后调用
-- 使用 `setenv("TZ", "CST-8", 1)` 和 `tzset()` 设置北京时间
-- 使用 `time()` 和 `localtime_r()` 获取本地时间
-- 若时间尚未同步，`time_sync_get_now()` 返回 `ESP_FAIL`
-- 当前 `schedule_monitor` 会在时间无效时自动使用模拟时间 fallback
+- 使用 `setenv("TZ", "CST-8", 1)` + `tzset()` 设置 UTC+8
+- SNTP 服务器：`ntp.aliyun.com`
+- `time_sync_init()` 由 `wifi_manager` 在 `IP_EVENT_STA_GOT_IP` 事件中自动调用
 
 ### wifi_manager
 
-负责 Wi-Fi Station 模式连接。
-
-主要接口：
+Wi-Fi Station 模式连接，支持 WPA2/WPA3 混合认证。
 
 ```c
 esp_err_t wifi_manager_init(void);
-bool wifi_manager_is_connected(void);
+bool      wifi_manager_is_connected(void);
 ```
 
 说明：
 
-- 当前 Wi-Fi SSID 和密码暂时在 `main/wifi_manager.c` 顶部配置
-- `WIFI_EVENT_STA_START` 时调用 `esp_wifi_connect()`
-- `WIFI_EVENT_STA_DISCONNECTED` 时自动重连，最多重试 5 次
-- `IP_EVENT_STA_GOT_IP` 时表示成功联网，会打印 IP 地址
-- 只有拿到 IP 后才调用 `time_sync_init()` 启动 SNTP
-
-配置位置：
-
-```c
-#define WIFI_SSID "你的WiFi名称"
-#define WIFI_PASS "你的WiFi密码"
-```
+- ESP32-P4 没有内置 Wi-Fi；通过板载 ESP32-C6 辅助芯片实现 Host Wi-Fi  
+  依赖 `espressif/esp_hosted` + `espressif/esp_wifi_remote`（已在 `main/idf_component.yml` 声明）
+- SSID / 密码在 `main/wifi_manager.c` 顶部配置：  
+  ```c
+  #define WIFI_SSID "你的WiFi名称"
+  #define WIFI_PASS "你的WiFi密码"
+  ```
+- 最多重试 5 次；失败后 `schedule_monitor` 自动切换到模拟时间 fallback
+- 认证模式通过 `CONFIG_ESP_WIFI_AUTH_*` Kconfig 宏配置，默认 `WIFI_AUTH_WPA2_PSK`
 
 ## 构建与烧录
 
-进入项目目录：
+> 使用 VS Code ESP-IDF 插件或命令行均可。
+
+首次克隆或添加新 managed_components 后须先删除 build 目录再构建：
 
 ```powershell
-cd c:\embedded\asd_schedule_storage_files
-```
-
-构建：
-
-```powershell
+idf.py fullclean
 idf.py build
 ```
 
 烧录并打开串口监视器：
 
 ```powershell
-idf.py build flash monitor
+idf.py flash monitor
 ```
 
-如果需要指定串口，例如 `COM5`：
+指定串口（例如 COM5）：
 
 ```powershell
-idf.py -p COM5 build flash monitor
+idf.py -p COM5 flash monitor
 ```
 
-退出串口监视器：
+退出串口监视器：`Ctrl + ]`
 
-```text
-Ctrl + ]
-```
-
-## 功能测试
-
-### 1. 首次启动测试
-
-首次烧录后，如果 NVS 中没有日程，应看到类似日志：
-
-```text
-ASD Schedule Storage + Monitor Demo Start
-No schedule found. Save default schedule.
-Default schedule saved successfully.
-Current schedule:
-  enabled   : 1
-  time      : 20:00
-  task_id   : 1
-Schedule monitor started.
-```
-
-这表示默认日程已经保存到 NVS。
-
-### 2. 日程触发测试
-
-当前模拟时间从 `19:59:50` 开始运行，等待大约 10 秒后，应看到类似日志：
-
-```text
-========== Schedule Triggered ==========
-Time      : 20:00:00
-Task ID   : 1
-Task Name : ...
-========================================
-```
-
-看到该日志表示：
-
-- NVS 读取成功
-- FreeRTOS 后台任务运行正常
-- 日程命中判断正常
-- 提醒触发正常
-
-### 3. 断电保存测试
-
-按开发板复位键，或重新打开 monitor。
-
-如果 NVS 保存成功，再次启动时应看到：
-
-```text
-Schedule loaded from NVS successfully.
-```
-
-而不是：
-
-```text
-No schedule found. Save default schedule.
-```
-
-### 4. 清空 NVS 后重新测试
-
-如果想重新测试首次启动流程，可以擦除 flash：
+升级前建议擦除 flash，避免旧版 NVS 结构冲突：
 
 ```powershell
 idf.py erase-flash
 idf.py build flash monitor
 ```
 
-### 5. Wi-Fi 连接测试
+## 功能测试
 
-在 `main/wifi_manager.c` 顶部配置 Wi-Fi：
+### 1. 首次启动
+
+NVS 为空时自动写入默认 6 条日程，预期日志：
+
+```text
+ASD Schedule Storage + Monitor Demo Start
+No schedule found. Save default ASD schedules.
+Default schedules saved successfully.
+Saved schedules: 6
+  [0] 07:30 晨间洗漱穿衣 enabled=1
+  [1] 08:00 早餐礼仪     enabled=1
+  ...
+Schedule monitor started.
+```
+
+### 2. 模拟时间触发测试（无 Wi-Fi）
+
+模拟时间从 `19:59:50` 开始，约 10 秒后触发 `20:00` 日程：
+
+```text
+MOCK_TIME: 20:00:00 | Schedule count: 6
+
+========== Schedule Triggered ==========
+Source    : MOCK_TIME
+Index     : 3
+Time      : 20:00:00
+Task ID   : 4
+Task Name : 睡前刷牙
+========================================
+```
+
+### 3. Wi-Fi + SNTP 真实时间测试
+
+配置正确 SSID/密码烧录后，预期日志：
+
+```text
+I (xxx) wifi_manager: got ip: 192.168.x.x
+SNTP started. Waiting for system time to become valid.
+...
+REAL_TIME: HH:MM:SS | Schedule count: 6
+```
+
+到达日程时间后触发：
+
+```text
+========== Schedule Triggered ==========
+Source    : REAL_TIME
+...
+========================================
+```
+
+### 4. 断电保存验证
+
+复位后若 NVS 有数据，日志应显示：
+
+```text
+Schedules loaded from NVS successfully.
+```
+
+## 对接建议（供队友参考）
+
+### LVGL UI
+
+UI 保存按钮回调：
 
 ```c
-#define WIFI_SSID "你的WiFi名称"
-#define WIFI_PASS "你的WiFi密码"
-```
-
-如果 Wi-Fi 名称或密码错误，预期现象：
-
-```text
-retry to connect to the AP
-failed to connect to SSID:...
-MOCK_TIME: ...
-```
-
-这表示 Wi-Fi 未连接成功，但日程监控仍会继续使用模拟时间 fallback。
-
-如果 Wi-Fi 配置正确，预期现象：
-
-```text
-got ip:xxx.xxx.xxx.xxx
-```
-
-拿到 IP 后，`wifi_manager` 会自动调用 `time_sync_init()` 启动 SNTP。
-
-### 6. SNTP 真实时间测试
-
-Wi-Fi 成功连接并完成 SNTP 校时后，预期 `schedule_monitor` 日志从：
-
-```text
-MOCK_TIME: ...
-```
-
-切换为：
-
-```text
-REAL_TIME: ...
-```
-
-这表示当前日程监控正在使用北京时间。到达任意已启用日程时间后，仍会通过 `schedule_event_send()` 发送 Queue 事件给 UI。
-
-## 当前 CMake 配置
-
-`main/CMakeLists.txt` 当前需要包含：
-
-```cmake
-idf_component_register(
-    SRCS
-        "main.c"
-        "schedule_storage.c"
-        "schedule_monitor.c"
-        "schedule_event.c"
-        "time_sync.c"
-        "wifi_manager.c"
-    PRIV_REQUIRES
-        nvs_flash
-        esp_wifi
-        esp_event
-        esp_netif
-        lwip
-    INCLUDE_DIRS
-        "."
-)
-```
-
-如果 Wi-Fi 初始化也放在本组件中，还需要增加：
-
-```cmake
-esp_wifi
-```
-
-## 后续对接建议
-
-### 对接 LVGL UI
-
-LVGL 保存按钮回调中可调用：
-
-```c
+// 新增或覆盖单条日程（固定写 index 0）
 schedule_save_from_ui(hour, minute, task_id, enabled);
-```
 
-建议 UI 和存储模块之间只通过该接口交互，不直接操作 NVS。
-
-如果 UI 后续实现日程列表，请使用：
-
-```c
+// 多条日程管理
 schedule_save_by_index(index, &cfg);
 schedule_get_all(list, MAX_SCHEDULE_NUM, &count);
 schedule_delete_by_index(index);
 ```
 
-日程触发后，`schedule_monitor` 会通过 FreeRTOS Queue 发送 `schedule_event_t` 事件。UI 模块可以通过 `schedule_event_get_queue()` 获取 Queue 句柄并接收事件：
+接收日程触发事件（在 UI 任务中）：
 
 ```c
-#include "freertos/FreeRTOS.h"
-#include "freertos/queue.h"
 #include "schedule_event.h"
 
 void ui_schedule_task(void *arg)
 {
     QueueHandle_t queue = schedule_event_get_queue();
     schedule_event_t event;
-
     while (1) {
         if (xQueueReceive(queue, &event, portMAX_DELAY) == pdTRUE) {
-            ui_show_schedule_card(
-                event.task_id,
-                schedule_get_task_name(event.task_id),
-                event.hour,
-                event.minute
-            );
+            // event.task_id / event.hour / event.minute
+            const char *name = schedule_get_task_name(event.task_id);
+            // 根据 task_id 显示对应图标、动画、卡片
         }
     }
 }
 ```
 
-UI 模块收到事件后，可以显示 LVGL 日程提醒卡片，并根据 `task_id`、`task_name`、`hour`、`minute` 决定卡片内容和动画。
+### AI / TTS
 
-### 对接 AI/TTS
-
-建议触发时只向 AI/TTS 模块发送结构化信息：
+触发时只需向 AI/TTS 传递 `task_id`，由 AI 根据 `task_id` 生成适合 ASD 儿童的引导语：
 
 ```text
-task_id
-task_name
-```
-
-AI/TTS 模块根据 `task_id` 生成适合 ASD 儿童的引导语，再进行语音播报。
-
-### 替换真实时间
-
-当前已新增：
-
-```text
-time_sync.c
-time_sync.h
-```
-
-职责：
-
-- SNTP 联网校时
-- 设置北京时间时区
-- 获取当前本地时间
-
-当前版本不会在 `time_sync.c` 中写死 Wi-Fi 账号密码。若后续 Wi-Fi 模块由队友实现，推荐在 Wi-Fi connected 事件之后调用：
-
-```c
-time_sync_init();
-```
-
-这样 `schedule_monitor` 只关心“现在几点”，不直接处理网络和 SNTP 细节。
-
-## SNTP 时间测试
-
-### 无网络测试
-
-不配置正确 Wi-Fi，或故意使用错误密码后烧录运行：
-
-```powershell
-idf.py build flash monitor
-```
-
-预期日志中会看到：
-
-```text
-failed to connect to SSID:...
-MOCK_TIME: 19:59:xx | Schedule: 20:00 ...
-```
-
-约 10 秒后触发：
-
-```text
-Schedule Triggered
-Source    : MOCK_TIME
-```
-
-### 有网络测试
-
-先在 `main/wifi_manager.c` 顶部配置 Wi-Fi：
-
-```c
-#define WIFI_SSID "你的WiFi名称"
-#define WIFI_PASS "你的WiFi密码"
-```
-
-烧录后，成功拿到 IP 时会看到：
-
-```text
-got ip:xxx.xxx.xxx.xxx
-```
-
-`wifi_manager` 会在 `IP_EVENT_STA_GOT_IP` 事件中调用 `time_sync_init()`。SNTP 同步成功后，monitor 日志应显示：
-
-```text
-REAL_TIME: HH:MM:SS | Schedule: ...
-```
-
-到达日程时间后触发：
-
-```text
-Schedule Triggered
-Source    : REAL_TIME
+task_id → AI/TTS 生成语音引导语 → 播报
 ```
 
 ## 注意事项
 
-- 当前版本支持 SNTP 真实时间，也保留模拟时间 fallback
-- 当前提醒方式保留串口 `printf`，同时已通过 Queue 向 UI 发送事件
-- 当前最多支持 20 个日程，index 范围为 `0~19`
-- `schedule_storage` 的对外接口应保持稳定，便于 UI 模块调用
-- 从旧版单日程 NVS 结构升级到多日程结构时，建议执行 `idf.py erase-flash` 后重新烧录，以写入新的默认 6 条日程
-- 源码中的中文注释建议统一保存为 UTF-8，避免不同终端显示乱码
+- 从旧版（含 `task_name` 字段的 NVS 结构）升级时，需先执行 `idf.py erase-flash`
+- 手机热点请开启 **2.4 GHz** 频段，ESP32 不支持 5 GHz
+- 源码中的中文注释请保存为 UTF-8 编码
+- `managed_components/` 目录和 `dependencies.lock` 已包含在仓库中，克隆后无需重新下载组件

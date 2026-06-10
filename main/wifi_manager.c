@@ -14,60 +14,94 @@
 #include "lwip/sys.h"
 #include "time_sync.h"
 
-#define WIFI_SSID "你的WiFi名称"
-#define WIFI_PASS "你的WiFi密码"
-#define WIFI_MAXIMUM_RETRY 5
+#define WIFI_SSID           "CZTtttt"
+#define WIFI_PASS           "66666666"
+#define WIFI_MAXIMUM_RETRY  5
 
-#define WIFI_CONNECTED_BIT BIT0
-#define WIFI_FAIL_BIT      BIT1
+#define WIFI_CONNECTED_BIT  BIT0
+#define WIFI_FAIL_BIT       BIT1
+
+/* SAE/WPA3 mode — mirrors the station example's Kconfig chain */
+#if CONFIG_ESP_STATION_EXAMPLE_WPA3_SAE_PWE_HUNT_AND_PECK
+#define WIFI_SAE_MODE       WPA3_SAE_PWE_HUNT_AND_PECK
+#define WIFI_H2E_IDENTIFIER ""
+#elif CONFIG_ESP_STATION_EXAMPLE_WPA3_SAE_PWE_HASH_TO_ELEMENT
+#define WIFI_SAE_MODE       WPA3_SAE_PWE_HASH_TO_ELEMENT
+#define WIFI_H2E_IDENTIFIER CONFIG_ESP_WIFI_PW_ID
+#elif CONFIG_ESP_STATION_EXAMPLE_WPA3_SAE_PWE_BOTH
+#define WIFI_SAE_MODE       WPA3_SAE_PWE_BOTH
+#define WIFI_H2E_IDENTIFIER CONFIG_ESP_WIFI_PW_ID
+#else
+#define WIFI_SAE_MODE       WPA3_SAE_PWE_UNSPECIFIED
+#define WIFI_H2E_IDENTIFIER ""
+#endif
+
+/* Auth mode threshold — mirrors the station example's Kconfig chain */
+#if CONFIG_ESP_WIFI_AUTH_OPEN
+#define WIFI_SCAN_AUTH_MODE_THRESHOLD WIFI_AUTH_OPEN
+#elif CONFIG_ESP_WIFI_AUTH_WEP
+#define WIFI_SCAN_AUTH_MODE_THRESHOLD WIFI_AUTH_WEP
+#elif CONFIG_ESP_WIFI_AUTH_WPA_PSK
+#define WIFI_SCAN_AUTH_MODE_THRESHOLD WIFI_AUTH_WPA_PSK
+#elif CONFIG_ESP_WIFI_AUTH_WPA2_PSK
+#define WIFI_SCAN_AUTH_MODE_THRESHOLD WIFI_AUTH_WPA2_PSK
+#elif CONFIG_ESP_WIFI_AUTH_WPA_WPA2_PSK
+#define WIFI_SCAN_AUTH_MODE_THRESHOLD WIFI_AUTH_WPA_WPA2_PSK
+#elif CONFIG_ESP_WIFI_AUTH_WPA3_PSK
+#define WIFI_SCAN_AUTH_MODE_THRESHOLD WIFI_AUTH_WPA3_PSK
+#elif CONFIG_ESP_WIFI_AUTH_WPA2_WPA3_PSK
+#define WIFI_SCAN_AUTH_MODE_THRESHOLD WIFI_AUTH_WPA2_WPA3_PSK
+#elif CONFIG_ESP_WIFI_AUTH_WAPI_PSK
+#define WIFI_SCAN_AUTH_MODE_THRESHOLD WIFI_AUTH_WAPI_PSK
+#else
+#define WIFI_SCAN_AUTH_MODE_THRESHOLD WIFI_AUTH_WPA2_PSK
+#endif
 
 static const char *TAG = "wifi_manager";
 
 static EventGroupHandle_t s_wifi_event_group = NULL;
-static int s_retry_num = 0;
-static bool s_wifi_connected = false;
-static bool s_wifi_initialized = false;
+static int                s_retry_num        = 0;
+static bool               s_connected        = false;
+static bool               s_initialized      = false;
 
 static void wifi_event_handler(void *arg,
-                               esp_event_base_t event_base,
-                               int32_t event_id,
-                               void *event_data)
+                                esp_event_base_t event_base,
+                                int32_t event_id,
+                                void *event_data)
 {
     (void)arg;
 
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
         esp_wifi_connect();
-    } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
-        s_wifi_connected = false;
 
+    } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
+        s_connected = false;
         if (s_retry_num < WIFI_MAXIMUM_RETRY) {
             esp_wifi_connect();
             s_retry_num++;
-            ESP_LOGI(TAG, "retry to connect to the AP (%d/%d)",
-                     s_retry_num,
-                     WIFI_MAXIMUM_RETRY);
+            ESP_LOGI(TAG, "retry %d/%d", s_retry_num, WIFI_MAXIMUM_RETRY);
         } else {
             xEventGroupSetBits(s_wifi_event_group, WIFI_FAIL_BIT);
-            ESP_LOGW(TAG, "failed to connect to SSID:%s", WIFI_SSID);
+            ESP_LOGW(TAG, "failed to connect to SSID: %s", WIFI_SSID);
         }
+
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
-        ESP_LOGI(TAG, "got ip:" IPSTR, IP2STR(&event->ip_info.ip));
-
+        ESP_LOGI(TAG, "got ip: " IPSTR, IP2STR(&event->ip_info.ip));
         s_retry_num = 0;
-        s_wifi_connected = true;
+        s_connected = true;
         xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
 
         esp_err_t err = time_sync_init();
         if (err != ESP_OK) {
-            ESP_LOGW(TAG, "failed to start SNTP time sync: %s", esp_err_to_name(err));
+            ESP_LOGW(TAG, "time sync init failed: %s", esp_err_to_name(err));
         }
     }
 }
 
 esp_err_t wifi_manager_init(void)
 {
-    if (s_wifi_initialized) {
+    if (s_initialized) {
         return ESP_OK;
     }
 
@@ -117,9 +151,11 @@ esp_err_t wifi_manager_init(void)
 
     wifi_config_t wifi_config = {
         .sta = {
-            .ssid = WIFI_SSID,
-            .password = WIFI_PASS,
-            .threshold.authmode = WIFI_AUTH_WPA2_PSK,
+            .ssid               = WIFI_SSID,
+            .password           = WIFI_PASS,
+            .threshold.authmode = WIFI_SCAN_AUTH_MODE_THRESHOLD,
+            .sae_pwe_h2e        = WIFI_SAE_MODE,
+            .sae_h2e_identifier = WIFI_H2E_IDENTIFIER,
         },
     };
 
@@ -138,13 +174,12 @@ esp_err_t wifi_manager_init(void)
         return err;
     }
 
-    s_wifi_initialized = true;
-
-    ESP_LOGI(TAG, "wifi_init_sta finished. SSID:%s", WIFI_SSID);
+    s_initialized = true;
+    ESP_LOGI(TAG, "wifi_manager_init done. SSID: %s", WIFI_SSID);
     return ESP_OK;
 }
 
 bool wifi_manager_is_connected(void)
 {
-    return s_wifi_connected;
+    return s_connected;
 }
